@@ -1,0 +1,6 @@
+{
+  "name": "QQ 邮件助手 MVP - 测试邮件管理与 Agent 执行看板",
+  "description": "QQ 邮箱智能助手控制台：LLM 测试邮件生成与管理、LangGraph 工作流实时预览、人机协同（HITL）审核与记忆偏好演进、执行日志与评测分析。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
