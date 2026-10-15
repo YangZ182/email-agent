@@ -1,0 +1,305 @@
+{
+  "tested_at": "2026-10-12T15:34:03.405095+08:00",
+  "interpreter": "D:\\projects\\agent-from-scratch-MVP\\.venv\\Scripts\\python.exe",
+  "model": "qwen-plus",
+  "temperature": 0.0,
+  "method": "Call the production triage_router with real Qwen and current production preference; synthetic emails only; no downstream execution.",
+  "preference_path": "D:\\projects\\agent-from-scratch-MVP\\data\\preferences\\triage_preferences.md",
+  "preference_sha256": "a7e0e7560996d81b93947361c33f2ce82d6dc030a48de5b912b835180e9cc2db",
+  "preference_text": "最高优先级规则：验证码邮件必须归为 NOTIFY。\n- 邮件主题或正文出现以下任一关键词，必须选择 NOTIFY：验证码、校验码、动态口令、一次性密码、安全码、verification code、security code、authentication code、OTP、one-time password、one-time code、login code。英文匹配不区分大小写。\n- 此规则优先于下方所有 IGNORE / RESPOND 规则；即使邮件由系统自动发送、注明无需回复或 do not reply、夹带推广内容、看起来可疑，也必须提醒我查看，不能归为 IGNORE。\n- NOTIFY 仅要求提醒我查看，不自动回复、不转发验证码、不代为点击链接或提交验证码。\n\nIGNORE:\n- Marketing newsletters and promotional emails\n- Spam or suspicious emails\n- Automated messages with no useful action or information\n\nNOTIFY:\n- Important information the owner should see\n- Deadlines, account notices, or status updates that do not require a reply\n\nRESPOND:\n- Direct questions addressed to the owner\n- Requests that clearly require acknowledgment or an answer\n- Personal or work messages where the sender expects a response\n\nChoose RESPOND only when the sender clearly expects a reply.\n",
+  "cases": [
+    {
+      "id": "zh-verification",
+      "keyword": "验证码",
+      "email": {
+        "id": "code-test-1",
+        "author": "Synthetic Sender <noreply@example.com>",
+        "to": "test-owner@example.com",
+        "subject": "您的登录验证码",
+        "email_thread": "验证码：123456，5 分钟内有效。系统自动发送，请勿回复。"
+      },
+      "expected_classification": "notify",
+      "actual_classification": "notify",
+      "goto": "triage_interrupt_handler",
+      "reason": "邮件主题和正文均包含关键词'验证码'，根据最高优先级规则，验证码邮件必须归为 NOTIFY。",
+      "error": null,
+      "passed": true,
+      "seconds": 2.14
+    },
+    {
+      "id": "zh-check-code",
+      "keyword": "校验码",
+      "email": {
+        "id": "code-test-2",
+        "author": "Synthetic Sender <noreply@example.com>",
+        "to": "test-owner@example.com",
+        "subject": "账户操作确认",
+        "email_thread": "本次操作的校验码为 234567，请勿回复。"
+      },
+      "expected_classification": "notify",
+      "actual_classification": "notify",
+      "goto": "triage_interrupt_handler",
+      "reason": "邮件中包含关键词'校验码'，根据最高优先级规则，验证码类邮件必须归为 NOTIFY。",
+      "error": null,
+      "passed": true,
+      "seconds": 1.23
+    },
+    {
+      "id": "zh-dynamic",
+      "keyword": "动态口令",
+      "email": {
+        "id": "code-test-3",
+        "author": "Synthetic Sender <noreply@example.com>",
+        "to": "test-owner@example.com",
+        "subject": "本次登录动态口令",
+        "email_thread": "动态口令为 345678，仅可使用一次。"
+      },
+      "expected_classification": "notify",
+      "actual_classification": "notify",
+      "goto": "triage_interrupt_handler",
+      "reason": "邮件主题和正文均包含关键词'动态口令'，根据最高优先级规则，验证码类邮件必须归为 NOTIFY。该邮件属于登录验证场景，需提醒用户查看并使用该一次性密码，但无需自动回复或代操作。",
+      "error": null,
+      "passed": true,
+      "seconds": 2.62
+    },
+    {
+      "id": "zh-onetime",
+      "keyword": "一次性密码",
+      "email": {
+        "id": "code-test-4",
+        "author": "Synthetic Sender <noreply@example.com>",
+        "to": "test-owner@example.com",
+        "subject": "登录信息",
+        "email_thread": "您的一次性密码为 456789，十分钟内有效。"
+      },
+      "expected_classification": "notify",
+      "actual_classification": "notify",
+      "goto": "triage_interrupt_handler",
+      "reason": "邮件中包含‘一次性密码’和具体验证码‘456789’，符合最高优先级规则：只要主题或正文中出现‘一次性密码’等关键词（不区分大小写），必须归为 NOTIFY。该邮件属于登录验证场景，需提醒邮箱主人立即查看并使用验证码，不可忽略、不可自动回复、不可转发，仅需通知。",
+      "error": null,
+      "passed": true,
+      "seconds": 2.86
+    },
+    {
+      "id": "zh-security",
+      "keyword": "安全码",
+      "email": {
+        "id": "code-test-5",
+        "author": "Synthetic Sender <noreply@example.com>",
+        "to": "test-owner@example.com",
+        "subject": "验证您的账户",
+        "email_thread": "安全码为 567890，请在账户页面输入。"
+      },
+      "expected_classification": "notify",
+      "actual_classification": "notify",
+      "goto": "triage_interrupt_handler",
+      "reason": "邮件主题或正文中包含关键词'安全码'，符合最高优先级规则：验证码邮件必须归为 NOTIFY。",
+      "error": null,
+      "passed": true,
+      "seconds": 1.38
+    },
+    {
+      "id": "en-verification",
+      "keyword": "verification code",
+      "email": {
+        "id": "code-test-6",
+        "author": "Synthetic Sender <noreply@example.com>",
+        "to": "test-owner@example.com",
+        "subject": "Your verification code",
+        "email_thread": "Your verification code is 123456. This automated message does not require a reply."
+      },
+      "expected_classification": "notify",
+      "actual_classification": "notify",
+      "goto": "triage_interrupt_handler",
+      "reason": "The email contains the keyword 'verification code' in the subject line, which triggers the highest-priority rule: all emails containing 'verification code' (or other listed authentication-related terms) must be classified as NOTIFY — regardless of automation, 'no reply' notice, or sender. The owner must be alerted to view this code.",
+      "error": null,
+      "passed": true,
+      "seconds": 2.16
+    },
+    {
+      "id": "en-security",
+      "keyword": "security code",
+      "email": {
+        "id": "code-test-7",
+        "author": "Synthetic Sender <noreply@example.com>",
+        "to": "test-owner@example.com",
+        "subject": "Account sign-in",
+        "email_thread": "Your security code is 234567. Do not reply."
+      },
+      "expected_classification": "notify",
+      "actual_classification": "notify",
+      "goto": "triage_interrupt_handler",
+      "reason": "The email contains a security code (234567) and the subject 'Account sign-in'. The phrase 'security code' triggers the highest-priority rule: any email containing 'security code' (case-insensitive) must be classified as NOTIFY, regardless of sender, 'Do not reply' instruction, or automated nature. This is a time-sensitive authentication credential the owner must see and use — no reply is expected or required.",
+      "error": null,
+      "passed": true,
+      "seconds": 2.72
+    },
+    {
+      "id": "en-authentication",
+      "keyword": "authentication code",
+      "email": {
+        "id": "code-test-8",
+        "author": "Synthetic Sender <noreply@example.com>",
+        "to": "test-owner@example.com",
+        "subject": "Sign-in confirmation",
+        "email_thread": "Your authentication code is 345678 and expires in 5 minutes."
+      },
+      "expected_classification": "notify",
+      "actual_classification": "notify",
+      "goto": "triage_interrupt_handler",
+      "reason": "The email contains an authentication code ('345678'), which matches the highest-priority rule: any email containing 'authentication code' (case-insensitive) must be classified as NOTIFY. This is a time-sensitive security credential the owner must see — no reply is required, but it must not be ignored or filtered.",
+      "error": null,
+      "passed": true,
+      "seconds": 2.8
+    },
+    {
+      "id": "en-otp",
+      "keyword": "OTP",
+      "email": {
+        "id": "code-test-9",
+        "author": "Synthetic Sender <noreply@example.com>",
+        "to": "test-owner@example.com",
+        "subject": "Your OTP",
+        "email_thread": "Use 456789 to finish signing in. This mailbox is not monitored."
+      },
+      "expected_classification": "notify",
+      "actual_classification": "notify",
+      "goto": "triage_interrupt_handler",
+      "reason": "The email contains 'OTP', which is a keyword that triggers the highest-priority NOTIFY rule. Even though it's an automated message and states 'This mailbox is not monitored', the presence of 'OTP' means the owner must be notified to view the code — no reply is required, but it must not be ignored.",
+      "error": null,
+      "passed": true,
+      "seconds": 2.25
+    },
+    {
+      "id": "en-password",
+      "keyword": "one-time password",
+      "email": {
+        "id": "code-test-10",
+        "author": "Synthetic Sender <noreply@example.com>",
+        "to": "test-owner@example.com",
+        "subject": "Sign-in request",
+        "email_thread": "Your one-time password is 567890. Do not reply to this automated email."
+      },
+      "expected_classification": "notify",
+      "actual_classification": "notify",
+      "goto": "triage_interrupt_handler",
+      "reason": "The email contains the phrase 'one-time password', which is a keyword that triggers the highest-priority NOTIFY rule. Regardless of the 'Do not reply' instruction or automated nature, the owner must be notified to view this security-sensitive code.",
+      "error": null,
+      "passed": true,
+      "seconds": 1.95
+    },
+    {
+      "id": "en-onetime-code",
+      "keyword": "one-time code",
+      "email": {
+        "id": "code-test-11",
+        "author": "Synthetic Sender <noreply@example.com>",
+        "to": "test-owner@example.com",
+        "subject": "Complete sign-in",
+        "email_thread": "Your one-time code is 678901. Expires in ten minutes."
+      },
+      "expected_classification": "notify",
+      "actual_classification": "notify",
+      "goto": "triage_interrupt_handler",
+      "reason": "The email contains the phrase 'one-time code', which is explicitly listed in the highest-priority rule as triggering NOTIFY. This is a verification/OTP email, and per the rules, such emails must be classified as NOTIFY regardless of sender, automation, or lack of reply instruction.",
+      "error": null,
+      "passed": true,
+      "seconds": 1.92
+    },
+    {
+      "id": "en-login",
+      "keyword": "login code",
+      "email": {
+        "id": "code-test-12",
+        "author": "Synthetic Sender <noreply@example.com>",
+        "to": "test-owner@example.com",
+        "subject": "Login confirmation",
+        "email_thread": "Your login code is 789012. No reply is required."
+      },
+      "expected_classification": "notify",
+      "actual_classification": "notify",
+      "goto": "triage_interrupt_handler",
+      "reason": "The email contains a login code, which matches the keyword 'login code' specified in the highest-priority rule. Therefore, it must be classified as NOTIFY — the owner should be alerted to view and use this code, regardless of the 'No reply is required' statement or automated sender.",
+      "error": null,
+      "passed": true,
+      "seconds": 2.98
+    },
+    {
+      "id": "en-uppercase",
+      "keyword": "VERIFICATION CODE",
+      "email": {
+        "id": "code-test-13",
+        "author": "Synthetic Sender <noreply@example.com>",
+        "to": "test-owner@example.com",
+        "subject": "YOUR VERIFICATION CODE",
+        "email_thread": "Use 890123 within 5 minutes. DO NOT REPLY."
+      },
+      "expected_classification": "notify",
+      "actual_classification": "notify",
+      "goto": "triage_interrupt_handler",
+      "reason": "The subject line contains 'VERIFICATION CODE', which triggers the highest-priority rule: all emails containing 'verification code' (case-insensitive) must be classified as NOTIFY. This applies regardless of sender, 'DO NOT REPLY' instruction, or automated nature.",
+      "error": null,
+      "passed": true,
+      "seconds": 2.25
+    },
+    {
+      "id": "keyword-conflict",
+      "keyword": "验证码 + verification code",
+      "email": {
+        "id": "code-test-14",
+        "author": "Synthetic Sender <noreply@example.com>",
+        "to": "test-owner@example.com",
+        "subject": "限时优惠，附账户验证码",
+        "email_thread": "订阅会员享八折优惠！您的 verification code（验证码）为 901234。此邮件自动发送，请勿回复。"
+      },
+      "expected_classification": "notify",
+      "actual_classification": "notify",
+      "goto": "triage_interrupt_handler",
+      "reason": "邮件中明确包含关键词 'verification code' 和中文 '验证码'，根据最高优先级规则，所有含验证码相关关键词的邮件必须归为 NOTIFY，无论是否自动发送、是否注明勿回复、是否夹带促销内容。",
+      "error": null,
+      "passed": true,
+      "seconds": 1.86
+    },
+    {
+      "id": "control-promotion",
+      "keyword": "无关键词：推广对照",
+      "email": {
+        "id": "code-test-15",
+        "author": "Synthetic Sender <noreply@example.com>",
+        "to": "test-owner@example.com",
+        "subject": "本周限时促销",
+        "email_thread": "全场商品八折，欢迎选购。您可随时退订本营销邮件。"
+      },
+      "expected_classification": "ignore",
+      "actual_classification": "ignore",
+      "goto": "mark_as_read_node",
+      "reason": "This is a marketing newsletter promoting a time-limited sale with an unsubscribe option. It contains no actionable information requiring the owner's attention, no verification code or security-related content, and no direct request for a reply. Per the rules, marketing newsletters fall under IGNORE.",
+      "error": null,
+      "passed": true,
+      "seconds": 2.05
+    },
+    {
+      "id": "control-reply",
+      "keyword": "无关键词：回复对照",
+      "email": {
+        "id": "code-test-16",
+        "author": "Synthetic Sender <noreply@example.com>",
+        "to": "test-owner@example.com",
+        "subject": "请确认报告提交日期",
+        "email_thread": "请告诉我你准备在哪一天提交项目报告，并回复确认。"
+      },
+      "expected_classification": "respond",
+      "actual_classification": "respond",
+      "goto": "response_agent",
+      "reason": "邮件中明确要求收件人‘请告诉我你准备在哪一天提交项目报告，并回复确认’，属于直接请求提供信息并明确要求回复， sender clearly expects a reply.",
+      "error": null,
+      "passed": true,
+      "seconds": 1.67
+    }
+  ],
+  "summary": {
+    "total": 16,
+    "passed": 16,
+    "errors": 0
+  }
+}

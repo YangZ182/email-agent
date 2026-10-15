@@ -1,217 +1,159 @@
-# 多邮箱智能助手 (QQ 邮箱 & Google 邮箱) MVP
+# QQ 邮件助手 MVP
 
-本项目基于 Agent from Scratch 与 LangGraph 架构，实现对 **QQ 邮箱 (`user@qq.com`)** 与 **Google 邮箱 (`zheyang3858@gmail.com`)** 的统一接入。系统提供双邮箱未读邮件批量拉取、基于用户偏好的智能路由分流（Triage）、Qwen 大模型回复子图推理、人机协同（HITL）审核中断关卡、LangGraph Store 记忆持久化以及发信安全审计保护。
+本项目基于 Agent from Scratch 邮件助手示例，使用 QQ IMAP/SMTP、Qwen 与 LangGraph，提供 Streamlit 人工审核、本地历史案例 RAG 和需人工确认的偏好文件。首版面向单用户本地使用。
 
----
+## 工作流程
 
-## 一、系统架构与模块组织
+页面读取收件箱全部未读邮件，使用 `BODY.PEEK[]` 获取正文。`ignore` 自动结束并标记已读，不进入日常列表；`notify` 进入“通知”区域，可确认知悉或转为回复；`respond` 自动进入回复子图，在“待回复”区域回答问题、编辑和批准草稿。已完成任务默认隐藏，可勾选“显示已完成”；未确认偏好和待保存案例仍保留。Qwen 根据当前邮件、回复偏好和 Top 3 历史案例起草；缺少事实时通过 `Question` 提问。用户编辑并批准最终正文后执行 SMTP。只有发送工具明确返回成功才保存历史案例，随后标记已读。候选偏好需另行确认，确认失败保留原文件，已发送邮件和历史案例保持有效。
 
-项目严格遵循模块化高内聚设计，架构、工具、数据与视图分层清晰：
+页面启动时自动继续旧版遗留的 `ignore / respond` 分类确认任务：忽略邮件结束并同步 QQ 已读状态，回复任务继续到问题或草稿审核。点击“读取全部未读邮件”处理本次读取到的未读邮件，一封失败不影响后续邮件；结束后显示本批完成并已读、待人工处理和失败数量。待人工处理及失败邮件保留未读，可在页面完成审核或展开“处理异常”重试。运行期间新收到的邮件在下次读取时处理。
 
-```
-/
-├── server.ts                       # Express 后端服务：代理 Gemini/Qwen 推理、模拟 SQLite 审计与 Store 状态
-├── src/
-│   ├── types/
-│   │   └── index.ts                # 统一 TypeScript 类型契约（邮件、步骤、任务、记忆、日志等）
-│   ├── core/
-│   │   └── dataset.ts              # 30 封合成基准测试数据集 (evaluation/dataset.py) 与初始状态
-│   ├── tools/
-│   │   └── mailboxAdapters.ts      # 双邮箱连接工具：Gmail API (OAuth2) 与 QQ 邮箱 IMAP/SMTP 适配器
-│   └── components/
-│       ├── Navbar.tsx              # 顶部导航栏：双邮箱状态显示、Google 登录与统一未读同步按钮
-│       ├── Sidebar.tsx             # 侧边栏：邮箱连接状态确认、离线模式切换与记忆重置
-│       ├── MailboxView.tsx         # 统一收件箱管理：邮件筛选、详情查看与 LLM 用例生成
-│       ├── AgentWorkflowView.tsx   # LangGraph 流程图与实时终端执行日志流
-│       ├── AgentInboxView.tsx      # 人机协同（HITL）审核界面 (支持批准/编辑/问询回答/忽略)
-│       ├── StoreViewer.tsx         # LangGraph Store 偏好记忆审查与动态注入
-│       ├── EvaluationView.tsx      # 30 封基准评测报告与混淆矩阵 (Confusion Matrix)
-│       ├── SendLogView.tsx         # .qq-send-log.sqlite3 尝试记录审计与防重发拦截
-│       └── EmailGeneratorModal.tsx # LLM 测试邮件生成弹窗 (支持中文/英文/多种预设场景)
-```
+更新 Python 业务模块后，请在运行 Streamlit 的终端按 `Ctrl+C`，再使用下方原命令启动；仅刷新浏览器可能继续使用进程中已加载的旧模块。
 
----
-
-## 二、关键数据结构与核心变量
-
-### 1. 统一邮件对象 `EmailItem` (`src/types/index.ts`)
-统一封装 QQ 邮箱与 Google 邮箱接收的未读邮件，消除底层协议差异：
-
-```typescript
-export interface EmailItem {
-  id: string;               // 唯一邮件 ID (如 "gm-01", "eval-ign-zh-01")
-  uid: number;              // IMAP 或映射的数字 UID，用于状态机与线程隔离
-  mailbox: 'qq' | 'gmail';  // 邮件来源邮箱：QQ 邮箱 或 Google 邮箱 (zheyang3858@gmail.com)
-  subject: string;          // 邮件标题
-  from: string;             // 发件人邮箱地址
-  to: string;               // 接收邮箱 (user@qq.com 或 zheyang3858@gmail.com)
-  date: string;             // 收发时间
-  body: string;             // 邮件文本正文
-  category: 'ignore' | 'notify' | 'respond'; // 分类判定
-  language: 'zh' | 'en';    // 语言语种
-  scenario: string;         // 测试场景描述 (如 "会议排期邀约缺少日历")
-  expectedTool: 'send_email_tool' | 'Question' | 'none'; // 预期工具调用
-  reason?: string;          // 分类与工具调用的判定依据
-  status: 'unread' | 'seen' | 'processing' | 'paused';  // 状态流转
-  gmailMessageId?: string;  // Gmail API 对应的消息 ID (用于修改标签或回复)
-  source?: 'benchmark' | 'llm' | 'live'; // 数据来源 (基准集、LLM合成或真实拉取)
-}
+```mermaid
+flowchart TD
+    A[QQ 未读邮件 BODY.PEEK] --> B[Triage + 路由偏好文件]
+    B -->|ignore| D[结束并标记已读]
+    B -->|notify| C[通知区域]
+    C -->|已知悉| D
+    C -->|转为回复| E[回复生成 / 待回复区域]
+    B -->|respond| E
+    P[回复偏好文件] --> E
+    R[Chroma 历史案例 Top 3] --> E
+    E -->|缺少事实| Q[Question 人工回答]
+    Q --> E
+    E --> H[编辑 / 批准 / 放弃]
+    H -->|批准| S[QQ SMTP + 发送审计]
+    S -->|明确成功| W[三字段案例写入 Chroma]
+    W --> D
+    H -->|放弃| D
+    C -->|人工纠正分类| T[路由偏好候选]
+    Q --> U[回复偏好候选]
+    S -->|成功且人工编辑过| U
+    T --> F[查看旧版 / 新版 / 差异并单独确认]
+    U --> F
+    F -->|确认| PERSIST[原子更新对应 Markdown 文件]
 ```
 
-### 2. HITL 待审核任务 `HITLTask` (`src/types/index.ts`)
-当工作流触发人工介入关卡时，保存在检查点中的上下文：
+测试期间，**实际 SMTP 收件人固定为 `2942397812@qq.com`**，即使草稿显示的是原始发件人。审核说明会展示实际测试收件人；启用其他收件人前，应先在测试邮箱核对收到的邮件。程序在 SMTP 发送前将尝试记录写入 `.qq-send-log.sqlite3`；发送结果不明确时，同一 UID 无法自动重试，需要先核对邮箱和本地日志。
 
-```typescript
-export interface HITLTask {
-  active: boolean;          // 是否处于暂停等待审核状态
-  emailId: string;
-  emailUid: number;
-  mailbox: 'qq' | 'gmail';  // 来源邮箱
-  subject: string;
-  from: string;
-  type: 'approve_send' | 'notify_review' | 'answer_question'; // 审核类型
-  proposedBody: string;     // Qwen 起草的回复正文 (send_email_tool 提案)
-  questionText?: string;    // Qwen 向用户发起的问询文本 (Question 提案)
-  reasoning: string;        // Agent 推理依据
-  tool: 'send_email_tool' | 'Question' | 'none';
-  actualRecipient: string;  // 安全发信沙箱收件人 (固定为 2942397812@qq.com)
-}
+## 在 Windows PowerShell 中运行
+
+使用 `D:\projects\agent-from-scratch-MVP` 中已有的项目 `.venv`。安装锁定依赖后启动审核页面：
+
+```powershell
+Set-Location D:\projects\agent-from-scratch-MVP
+uv sync --extra dev --locked
+.\.venv\Scripts\python.exe -X utf8 -m streamlit run .\src\email_assistant\review_app.py --server.address 127.0.0.1 --server.port 8501 --browser.gatherUsageStats false
 ```
 
-### 3. LangGraph Store 偏好记忆 `MemoryStore` (`src/types/index.ts`)
-用于在执行节点外层持久化用户习惯，支持跨会话线程（Thread）动态更新：
+打开 `http://127.0.0.1:8501`，点击“读取全部未读邮件”，在“通知”或“待回复”区域处理。首次读取时也会继续旧版遗留的 ignore/respond 分类审核任务；notify 仍等待用户处理。按 UID 复用已有任务，重复读取不会重复发送。大量未读邮件会增加分类和起草耗时及模型用量。Streamlit 直接运行现有业务图，使用本地 SQLite checkpoint；此运行方式无需启动 `langgraph dev` 或 Agent Inbox。旧 `run_ingest.py` 仍是 Agent Server 入口，其线程与 Streamlit 的 checkpoint 文件各自独立。
 
-```typescript
-export interface MemoryStore {
-  response_preferences: string[]; // 回复偏好 (如 "使用单句确认，不加问候语或落款")
-  triage_preferences: string[];   // 分流偏好 (控制分类到 ignore, notify 还是 respond)
-  history: Array<{                // 演进审计日志
-    timestamp: string;
-    action: string;
-    field: 'response_preferences' | 'triage_preferences';
-    diff: string;
-  }>;
-}
+正文使用限高阅读区和可点击链接，原文与分类详情折叠保存。HTML 邮件转换为 Markdown，禁用原始 HTML 执行并移除图片，避免加载远程跟踪图片。显示整理不会修改 Agent 输入或历史案例原文。下拉菜单显示当前区域的已导入任务，数量由分类和完成状态决定，无五封限制。
+
+根目录 `.env` 使用以下配置：`DASHSCOPE_API_KEY`、`DASHSCOPE_BASE_URL`、`QWEN_MODEL`、`LANGSMITH_TRACING=false`、`QQ_EMAIL` 和 `QQ_EMAIL_AUTH_CODE`。请妥善保管该文件，避免公开密钥或邮箱授权码。仅在需要恢复 Python 依赖时运行 `uv sync`。
+
+回复审核中，Question 答案用于继续起草；编辑草稿后需勾选确认并点击 Approve 才发送。Ignore 放弃回复并按终止路径标记已读。路由纠正仅生成路由偏好候选；问题回答和成功发送的人工编辑仅生成回复偏好候选。一次性事实不会被当作长期事实写入偏好。页面显示旧版、新版与差异，确认或拒绝候选可独立操作。
+
+刷新页面或重启 Streamlit 后，任务从 `data/review-checkpoints.sqlite3` 恢复，候选确认/拒绝记录也保存在此文件。草稿编辑、问题答案和按钮状态使用 `st.session_state`；未提交的输入在新浏览器会话中可能丢失，待审核任务及已提交决定以 checkpoint 为准。发送成功后批准按钮锁定；SMTP 结果不明确的 `attempting` 记录阻止自动重发。案例保存失败可单独重试；网络故障、人工拒绝或无效候选均保留当前偏好。
+
+## 本地双记忆与数据边界
+
+| 本地位置 | 用途 |
+| --- | --- |
+| `data/email_rag/` | Chroma 持久化目录，包含 `chroma.sqlite3` 与向量索引子目录；备份/迁移需复制整个目录 |
+| `data/preferences/triage_preferences.md` | `ignore / notify / respond` 路由偏好，缺失时从项目默认规则初始化 |
+| `data/preferences/response_preferences.md` | 语气、长度、格式、称呼、事实约束，缺失时从默认回复偏好初始化 |
+| `data/review-checkpoints.sqlite3` | LangGraph thread/HITL 状态及候选确认记录；运行时可能同时有 SQLite 辅助文件 |
+| `.qq-send-log.sqlite3` | 发送审计及最终实际回复；UID 唯一约束阻止重复发送，成功案例保存失败时可据此恢复 |
+
+两个偏好文件与 Chroma 在本机长期保存，关闭进程后仍有效。LangGraph Store 不再保存运行偏好。删除上述目录/文件会分别丢失对应数据；删除发送审计会失去重复发送保护。停止应用后一起备份这些文件与目录。运行数据已加入 `.gitignore`。
+
+案例业务字段严格为 `subject`、`body`、`actual_reply`。Chroma ID 是三字段内容哈希加 chunk 序号，用于去重；正常邮件为一个 chunk，超过 2000 字符仅切分正文，每段保留完整主题和实际回复。检索取 Top 3，当前查询正文取前 2000 字符。历史案例只进入回复生成提示词，不参与 Triage。
+
+Embedding 固定使用 DashScope `text-embedding-v4`、1024 维，复用现有 `DASHSCOPE_API_KEY`、`DASHSCOPE_BASE_URL`。Qwen 与 Embedding 共用直连 HTTP 配置 `trust_env=False`，解决当前 Windows 系统代理导致的 TLS 断连，系统代理设置保持原值。**生成向量时，邮件主题、正文和实际回复会发送到 DashScope；检索查询也会发送到 DashScope。** Qwen 同样接收邮件与检索案例。发送失败、取消、忽略、仅生成草稿均不写入案例。邮件与案例按不可信数据处理，无法直接修改偏好或授权发送；后端审核关卡与发送审计独立执行这些限制。
+
+## 离线安全检查
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 -m pytest tests -q -p no:cacheprovider --basetemp .test-runtime
 ```
 
-### 4. 发送审计记录 `SendAuditRecord` (`src/types/index.ts`)
-对应本地 `.qq-send-log.sqlite3` 数据库的表结构，确保发信动作有据可查：
+测试使用模型、Embedding、发送和已读替身，所有偏好、Chroma 和发送审计写入独立临时目录。覆盖三字段案例、长正文切分、去重、跨进程持久化、候选确认门槛、失败保留、提示注入边界、Question 恢复、重复批准与原有发送安全检查。
 
-```typescript
-export interface SendAuditRecord {
-  id: string;
-  uid: number;              // 关联的邮件 UID
-  mailbox: 'qq' | 'gmail';
-  originalRecipient: string;// 原发件人 (展示用)
-  actualRecipient: string;  // 实际 SMTP 投递收件人 (严格固定为 2942397812@qq.com)
-  subject: string;
-  body: string;             // 实际发出的最终正文
-  status: 'sent' | 'blocked_duplicate' | 'failed';
-  timestamp: string;
-  hash: string;             // SHA-256 完整性校验哈希
-}
+## MVP 评估
+
+`evaluation/` 复用现有业务图，评估真实 Qwen 的邮件分类与首次工具选择、人工审核流程，以及反馈是否更新用户偏好（preferences）。评估发送和标记已读使用替身，不读取真实邮箱、不进行真实发送，也不写入生产发送日志。无需启动 LangGraph 服务或 Agent Inbox。
+
+从项目根目录使用已有 `.venv` 运行完整评估：
+
+```powershell
+Set-Location D:\projects\agent-from-scratch-MVP
+.\.venv\Scripts\python.exe -X utf8 .\evaluation\run_evaluation.py
 ```
 
-### 5. 安全发信常量与沙箱配置 (`server.ts` & `src/tools/mailboxAdapters.ts`)
-- `FIXED_TEST_RECIPIENT = '2942397812@qq.com'`: 测试期间严格固定的实际发信收件人。即便前端草稿展示原发件人，发送时绝不泄露给外部真实收件人。
-- `GOOGLE_USER_EMAIL = 'zheyang3858@gmail.com'`: Google 邮箱目标账号。
-- `GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.modify']`: 严格最小权限范围，支持读取未读邮件、修改标签（移除 `UNREAD` 标记已读）以及发送回复。
+完整评估使用根 `.env` 中的 `DASHSCOPE_API_KEY`、`DASHSCOPE_BASE_URL` 和 `QWEN_MODEL`，产生 Qwen 调用费用。评估入口关闭 LangSmith 调用追踪，不输出凭据，不需要升级依赖。每封基线邮件只执行一次，串行运行到首次人工中断或正常结束，不批准发送；运行错误保留在结果中，不选择性重跑。
 
----
+仅运行确定性流程与反馈检查：
 
-## 三、核心功能与处理逻辑
-
-### 1. 双邮箱连接与未读同步
-- **QQ 邮箱连接**：基于 IMAP 协议（端口 993）读取未读邮件，发送时经 SMTP 端口 465 投递。
-- **Google 邮箱连接**：通过 Firebase Auth 弹出式 Google 账号授权，以最小权限 `gmail.modify` 获取 Access Token。Token 仅留存于客户端内存（遵从零持久化安全规范），通过 REST API 交互：
-  - `fetchLiveGmailUnread()`: 请求 `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=is:unread`。
-  - `markGmailRead()`: 触发 `users.me.messages.modify`，将 `removeLabelIds` 设为 `['UNREAD']`。
-  - `sendGmailMessage()`: 使用 Base64 编码的 RFC 2822 标准格式发信。
-- **一键同步双邮箱**：顶部操作栏提供「同步双邮箱未读」，合并两处邮件队列，按统一流程串行处理。
-
-### 2. 统一 LangGraph 处理流程
-两家邮箱的邮件进入完全一致的状态机图：
-
-```
-[双邮箱未读邮件] (QQ IMAP / Gmail API)
-       │
-       ▼
- [1. Ingest 节点] ──> 检查 SQLite 重复发信历史 (防重复拦截)
-       │
-       ▼
- [2. Triage 分流] ──> 读取 Store 中的 triage_preferences
-       │
- ┌─────┴───────────────────┬──────────────────────┐
- │                         │                      │
- ▼                         ▼                      ▼
-[ignore 路径]             [notify 路径]          [respond 路径]
- │                         │                      │
- │                         ▼                      ▼
- │                   [HITL 审核关卡]        [Qwen 回复子图]
- │                   (用户知晓/转回复)             │
- │                                        ┌───────┴────────┐
- │                                        ▼                ▼
- │                                [缺少日程/事实]   [事实完备单句]
- │                                调用 Question     调用 send_email_tool
- │                                        │                │
- │                                        └───────┬────────┘
- │                                                ▼
- │                                          [HITL 检查点暂停]
- │                                          (Agent Inbox 审核)
- │                                                │
- │                                      ┌─────────┴─────────┐
- │                                      ▼                   ▼
- │                                   [编辑 Edit]        [批准 Accept]
- │                                      │                   │
- │                                      ▼                   ▼
- │                            [更新 response_preferences]   │
- │                                      │                   │
- └──────────────────────────────────────┴─────────┬─────────┘
-                                                  ▼
-                                       [3. 发信并写入 SQLite]
-                                       (固定至 2942397812@qq.com)
-                                                  │
-                                                  ▼
-                                       [4. 标记对应邮箱已读]
-                                       QQ 打上 \Seen / Gmail 移除 UNREAD
-                                                  │
-                                                  ▼
-                                               [结束 Done]
+```powershell
+Set-Location D:\projects\agent-from-scratch-MVP
+.\.venv\Scripts\python.exe -X utf8 .\evaluation\run_evaluation.py --offline-only
 ```
 
-### 3. 人机协同（HITL）与 Agent Inbox 交互
-流程在关键时刻自动中断（Checkpoint Interrupt），提供 4 种确定性决策：
-- **`accept` (批准)**：原样批准发送，调用对应发信接口，记录发信日志至 SQLite 并标记已读。
-- **`edit` (编辑)**：允许修改回复文本。**编辑后的表达将自动沉淀并固化至 Store 的 `response_preferences`**，后续同类邮件将自动模仿该写作偏好。
-- **`respond` (反馈/解答)**：当 Qwen 调用 `Question` 询问用户时间安排时，用户在界面输入可用时间窗口，回复子图恢复执行并继续起草。
-- **`ignore` (忽略)**：舍弃当前草稿或通知，流程安全结束并标记已读。
+离线模式使用模型替身，不调用 Qwen；结果中的真实模型指标标为“未运行”。
 
----
+固定数据集在 `evaluation/dataset.py`：30 封合成邮件，`ignore / notify / respond` 各 10 封，每类中文、英文各 5 封。保留参考项目 16 个邮件场景并按当前 MVP 规则适配，其余补齐促销、重要通知、收件确认、直接提问与正文越权指令场景。每条记录含标准标签、理由和来源，运行时不依赖参考项目。会议和税务通话请求缺少用户排期，预期工具为 `Question`；营销通讯和群发课程推广按当前规则忽略，电话体检提醒按无需邮件答复的通知处理。`respond` 中 6 封信息充分，预期 `send_email_tool`；4 封缺少事实或排期，预期 `Question`。
 
-## 四、真实环境验收基线（2026-10-02 记录）
+每封基线邮件使用独立 thread、临时 checkpointer/Store、临时偏好文件与空的临时 Chroma；基线保持原先分类直接路由方式，在首次工具/通知中断处停止。`evaluation/feedback_cases.py` 使用确定性模型替身，检查人工分类纠正仅生成路由候选，编辑/回答仅生成回复候选，确认前文件保持原值，确认后目标文件更新且另一文件保持原值。评测不读取生产双记忆，也不执行真实 Embedding、QQ 发送或已读操作。
 
-在真实 QQ 邮件 UID 2585 的验收过程中：
-1. 邮件经 Qwen 分类后在 `send_email_tool` 前暂停，邮件保持未读，SQLite 中无预先尝试记录。
-2. 用户在 Agent Inbox 中将回复编辑为 `Received.` 并批准发送。
-3. 测试邮箱收到且仅收到一封匹配回复（UID 2587）。原邮件 UID 2585 被打上 `\Seen` 标记，SQLite 记录状态更新为 `sent`。
-4. Store 持久化了偏好：`"使用单句确认，不加问候语或落款"`。
-5. 后续独立测试线程（UID 2588）在无需人工干预的情况下，直接生成了符合偏好的 `Received.` 草稿。
+每次运行覆盖 `evaluation/results/` 中两个文件，不建立日期子目录：
 
----
+| 文件 | 内容 |
+| --- | --- |
+| `details.json` | 环境、模型、数据集与提示词摘要哈希；`baseline` 原始模型输出及模拟操作；`flow_checks` 流程证据；`feedback_checks` 独立人工反馈和更新前后的用户偏好 |
+| `report.md` | 中文指标、混淆矩阵、检查通过数、按错误类型总结的失败案例分析与局限 |
 
-## 五、启动与运行方式
+分类指标包括正确数 / 30、准确率、各类精确率（precision）、召回率（recall）、F1 分数及宏平均 F1（macro-F1）。执行错误计入准确率分母，混淆矩阵增加 `error` 列。工具选择按标准 `respond` 的 10 封计算达成数 / 10，分类错误导致未进入回复路径也计为失败。报告另列审核前模拟发送与标记已读检查，以及流程和反馈检查的通过数，不合成总分、不预设上线阈值。
 
-项目采用 Vite + Express 全栈架构，开发与生产服务均绑定在 3000 端口：
+混淆矩阵的行表示实际类别（人工标准标签），列表示模型预测结果。“等待人工处理的邮件”指图运行到首次人工中断后暂停的邮件，包含通知审核、回复草稿审核和 `Question` 问询；报告分别列出数量。审核前操作统计仅覆盖这些暂停邮件，`ignore` 路径的模拟已读另见完整明细。报告按错误类型分析现象、模型理由、影响与后续验证方向，逐样本失败记录保留在 `details.json`。
 
-```bash
-# 启动开发服务器 (挂载 Express 路由与 Vite 中间件)
-npm run dev
+这是小样本单次运行基线。确定性检查验证候选与确认写入机制，真实模型生成偏好的语义质量需另行验证。原有 `evaluation/results/` 基线文件保持历史证据；运行评测会覆盖两个结果文件，指标只适用于该次代码和提示词。评测不进入运行页面。
 
-# 语法检查与 TypeScript 类型校验
-npm run lint
+## 真实环境验收记录（2026-10-02）
 
-# 生产环境静态打包
-npm run build
+以下记录属于旧 Agent Inbox/Store 实现，用于保留历史证据。新 Streamlit 双记忆实现的离线与合成 UI 验收见下方，真实 QQ 发送需要在页面人工批准后核验。
+
+- 使用项目 `.venv` 在 2024 端口启动图服务接口；已有官方 Inbox 使用 `next.cmd` 在 3000 端口启动。
+- 真实 QQ 邮件 UID 2585 经 Qwen 分类后，在发送前暂停。暂停时邮件保持未读，发送日志中没有对应尝试记录。
+- 通过实际 Inbox 界面编辑并批准回复后，测试邮箱收到且仅收到一封匹配的回复（UID 2587），正文与编辑内容一致。随后 UID 2585 带有 `\\Seen` 已读标记，SQLite 记录状态为 `sent`。
+- Store 保存了“使用单句确认，不加问候语或落款”的偏好。新的受控测试邮件 UID 2588 在独立执行线程中生成了 `Received.` 草稿。验收时该草稿处于暂停、未发送状态，保留供检查。
+- 官方 Inbox 的 `inbox-item-input.tsx` 需要两行空值兼容修复：使用格式化后的显示值计算文本框行数。此前的 Markdown 兼容修复也予以保留，两项修复均未改变业务图。
+
+截图：[Agent Inbox 中的后续草稿](outputs/qq-memory-inbox.jpg)。这次验收验证了同一运行服务内跨执行线程的记忆使用。跨服务重启的检查点与 Store 恢复仍有未验证项或已知限制；审核期间请保持服务运行。
+
+## Streamlit 合成页面验收
+
+使用项目 `.venv` 和已安装的 Edge 渲染真实 Streamlit 页面，合成邮件、模型和发送替身与生产数据隔离。截图位于 `outputs/review-ui/`。复现时先启动测试页面，再运行浏览器检查脚本：
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 -m streamlit run .\tests\ui_fixture_app.py --server.address 127.0.0.1 --server.port 8502 --server.headless true --browser.gatherUsageStats false
+# 另一个终端
+.\.venv\Scripts\python.exe -X utf8 .\tests\check_review_browser.py
 ```
 
-访问 `http://localhost:3000` 即可进入交互控制台，实现双邮箱连接确认、未读邮件同步、实时流程追踪与基准指标评测。
+合成页面固定禁用真实邮箱读取及真实 SMTP，用于验证显示和交互。真实 DashScope 合成数据检查见下文；真实 QQ 投递及收到的正文需经人工批准后核验。
+
+2026-10-11 日常分区调整验收：项目 `.venv` 中离线测试 `35 passed`；正文图片处理补充后，相关测试 `17 passed`。真实 Edge 页面逐项验证通知知悉后移除、通知转回复、ignore 不进入列表、限高正文与标题链接、已完成任务显示、Question、草稿编辑、刷新后 checkpoint 恢复、发送失败提示与防重发、成功后批准锁定、处理期间禁用按钮及偏好确认/拒绝。正式页面在 8501 端口实际打开检查；本轮验收未读取、标记或发送真实邮件。
+
+真实 DashScope 合成数据检查已通过：Embedding 写入、内容去重、关闭 Chroma 后重新打开并检索，以及 Qwen 生成回复偏好候选、确认前文件不变、单独确认后落盘。可用以下命令复验（调用 DashScope/Qwen 会产生费用）：
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 .\tests\check_live_memory.py
+```
+
+截图：[分类与偏好差异](outputs/review-ui/02-triage-diff.png)、[Question](outputs/review-ui/03-question.png)、[发送错误](outputs/review-ui/05-send-error.png)、[发送成功与偏好候选](outputs/review-ui/06-sent-and-preference.png)、[正式页面](outputs/review-ui/09-production-ready.png)。浏览器检查脚本通过本地 HTTP 提供静态资源，绕过本机 Edge 偶发的 `ERR_NETWORK_CHANGED`；页面与后台的真实 WebSocket 交互保持运行。
+
+本次尚未重新执行真实 QQ 投递验收，也未重跑 30 封真实模型分类基线；原 `evaluation/results/` 两个历史结果文件保留。可在正式页面人工批准一封测试邮件后，核对固定测试邮箱收到的正文、发送审计和新增 Chroma 案例。
+
+2026-10-12 已读同步修复验收：在项目 `.venv` 中离线测试 `38 passed`，实际 Edge 页面通过批次统计和原审核流程检查。重启正式 Streamlit 服务后自动完成 5 封旧版 `ignore` 待确认任务；在正式页面读取另外 2 封未读邮件，均分类为 `ignore` 并完成。QQ 收件箱未读数从 7 降到 0，原 7 封邮件逐封查询 `FLAGS` 均确认含 `\\Seen`。本轮没有批准或发送真实回复，待审批/发送失败保留未读及失败重试由隔离测试验证。截图：[批次统计](outputs/review-ui/11-batch-read-summary.png)、[正式页面处理结果](outputs/review-ui/09-production-ready.png)。
