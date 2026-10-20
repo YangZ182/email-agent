@@ -68,3 +68,4 @@ data/review-checkpoints.sqlite3*
 .ui-check-runtime/
 .test-runtime*/
 evaluation-memory-*/
+.sites-source-history/

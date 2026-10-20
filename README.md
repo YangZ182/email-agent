@@ -2,6 +2,18 @@
 
 本项目基于 Agent from Scratch 邮件助手示例，使用 QQ IMAP/SMTP、Qwen 与 LangGraph，提供 Streamlit 人工审核、本地历史案例 RAG 和需人工确认的偏好文件。首版面向单用户本地使用。
 
+## 在线项目体验
+
+[打开邮件 Agent 工作流体验](https://email-agent-workflow.spunky-pixie-7158.chatgpt.site)。点击“读取全部邮件”加载 8 封预置邮件，体验通知、回复审核、Question 回路与偏好确认。顶部 Graph 按当前邮件累计点亮执行路径，Respond Agent 以子图边框展示层级。
+
+网页源码位于 `site/dist/`，使用原生 HTML、CSS、JavaScript 和 SVG，无构建依赖；数据仅保留在当前浏览器会话，不连接真实邮箱或模型。可用项目环境启动本地预览：
+
+```powershell
+.\.venv\Scripts\python.exe -m http.server 8520 --bind 127.0.0.1 --directory site\dist
+```
+
+2026-10-20 桌面浏览器验收：四种路径各两封共 8 封完成；检查重复读取不重复、Question 返回起草、批准前发送节点未点亮、发送后锁定、通知转回复、偏好确认/拒绝、放弃回复及重置。此验收与下方真实 Qwen 分类基线分别记录。
+
 ## 工作流程
 
 页面读取收件箱全部未读邮件，使用 `BODY.PEEK[]` 获取正文。`ignore` 自动结束并标记已读，不进入日常列表；`notify` 进入“通知”区域，可确认知悉或转为回复；`respond` 自动进入回复子图，在“待回复”区域回答问题、编辑和批准草稿。已完成任务默认隐藏，可勾选“显示已完成”；未确认偏好和待保存案例仍保留。Qwen 根据当前邮件、回复偏好和 Top 3 历史案例起草；缺少事实时通过 `Question` 提问。用户编辑并批准最终正文后执行 SMTP。只有发送工具明确返回成功才保存历史案例，随后标记已读。候选偏好需另行确认，确认失败保留原文件，已发送邮件和历史案例保持有效。
